@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider))]
@@ -43,15 +44,9 @@ public class ChunkMesh : MonoBehaviour, IPoolItem
     [Button("Generate", "EditorGenerateMesh")]
     private Vector2 m_chunkIndex;
 
-    private int m_baseHeight = 64;
-    private int m_maxHeight = 128;
-
     private MeshFilter m_meshFilter;
     private MeshCollider m_meshCollider;
     private MeshRenderer m_meshRenderer;
-
-    // Now let's create land.
-    private Block[,,] m_blocks;
 
     private volatile List<Vector3> m_verts = new List<Vector3>();
     private volatile List<int> m_indices = new List<int>();
@@ -81,65 +76,28 @@ public class ChunkMesh : MonoBehaviour, IPoolItem
         m_meshCollider = GetComponent<MeshCollider>();
         m_meshRenderer = GetComponent<MeshRenderer>();
     }
-
-    private void GenerateHeightmap()
+    
+    public void GenerateMesh(Block[][,] blocks)
     {
-        m_blocks = new Block[m_size + 2, m_maxHeight, m_size + 2];
-
-        for (int y = m_maxHeight - 1; y >= 0; y--)
-        {
-            for (int z = 0; z < m_size + 2; z++)
-            {
-                for (int x = 0; x < m_size + 2; x++)
-                {
-                    float simX = m_chunkIndex.x * 16 + x - 1;
-                    float simZ = m_chunkIndex.y * 16 + z - 1;
-
-                    float simplex1 = Noise.GetSimplex(simX * 0.8f, simZ * 0.8f) * 10.0f;
-                    float simplex2 = Noise.GetSimplex(simX * 0.3f, simZ * 0.3f) * 10.0f *
-                                     (Noise.GetSimplex(simX * 0.3f, simZ * 0.3f) + 0.5f);
-
-                    Block block = Block.Air;
-
-                    // Block generation is here
-                    if (m_chunkIndex == Vector2.zero && x == 8 && z == 8 && y <= simplex1 + simplex2 + m_baseHeight)
-                    {
-                        block = Block.Glowstone;
-                    }
-                    else if (y <= simplex1 + simplex2 + m_baseHeight)
-                    {
-                        block = Block.Grass;
-                    }
-
-                    m_blocks[x, y, z] = block;
-                }
-            }
-        }
-    }
-
-    public void GenerateMesh()
-    {
-        GenerateHeightmap();
-
         m_verts.Clear();
         m_indices.Clear();
         m_uvs.Clear();
 
         // Populate faces.
-        for (int y = 1; y < m_maxHeight; y++)
+        for (int y = 1; y < blocks.Length; y++)
         {
             for (int z = 1; z <= m_size; z++)
             {
                 for (int x = 1; x <= m_size; x++)
                 {
-                    Block block = m_blocks[x, y, z];
+                    Block block = blocks[y][x, z];
 
                     if (!block.IsRenderable)
                     {
                         continue;
                     }
 
-                    BuildBlock(x, y, z, block);
+                    BuildBlock(x, y, z, block, blocks);
                 }
             }
         }
@@ -175,23 +133,44 @@ public class ChunkMesh : MonoBehaviour, IPoolItem
         m_meshRenderer.enabled = true;
     }
 
-    private void BuildBlock(int x, int y, int z, Block block)
+    private void BuildBlock(int x, int y, int z, Block block, IReadOnlyList<Block[,]> blocks)
     {
         Vector3 pos = new Vector3(x - 1, y, z - 1);
 
-        bool left = !m_blocks[x - 1, y, z].IsRenderable;
-        bool right = !m_blocks[x + 1, y, z].IsRenderable;
-        bool top = y ==  m_maxHeight - 1 || !m_blocks[x, y + 1, z].IsRenderable;
-        bool bottom = y == 0 || !m_blocks[x, y - 1, z].IsRenderable;
-        bool front = !m_blocks[x, y, z - 1].IsRenderable;
-        bool back = !m_blocks[x, y, z + 1].IsRenderable;
+        // ToDo: Need to optimise this.
+        Block left = blocks[y][x - 1, z];
+        Block right = blocks[y][x + 1, z];
+        Block front = blocks[y][x, z - 1];
+        Block back = blocks[y][x, z + 1];
+        Block top = y == blocks.Count - 1 ? null : blocks[y + 1][x, z];
+        Block bottom = y == 0 ? null : blocks[y - 1][x, z];
+        
+        if (ShouldBuildFace(block, top)) BuildFace(pos, FaceBuilder[Face.Top], block.TileMap.Top);
+        if (ShouldBuildFace(block, bottom)) BuildFace(pos, FaceBuilder[Face.Bottom], block.TileMap.Bottom);
+        if (ShouldBuildFace(block, left)) BuildFace(pos, FaceBuilder[Face.Left], block.TileMap.Left);
+        if (ShouldBuildFace(block, right)) BuildFace(pos, FaceBuilder[Face.Right], block.TileMap.Right);
+        if (ShouldBuildFace(block, front)) BuildFace(pos, FaceBuilder[Face.Front], block.TileMap.Front);
+        if (ShouldBuildFace(block, back)) BuildFace(pos, FaceBuilder[Face.Back], block.TileMap.Back);
+    }
 
-        if (top) BuildFace(pos, FaceBuilder[Face.Top], block.TileMap.Top);
-        if (bottom) BuildFace(pos, FaceBuilder[Face.Bottom], block.TileMap.Bottom);
-        if (left) BuildFace(pos, FaceBuilder[Face.Left], block.TileMap.Left);
-        if (right) BuildFace(pos, FaceBuilder[Face.Right], block.TileMap.Right);
-        if (front) BuildFace(pos, FaceBuilder[Face.Front], block.TileMap.Front);
-        if (back) BuildFace(pos, FaceBuilder[Face.Back], block.TileMap.Back);
+    private static bool ShouldBuildFace(Block current, Block next)
+    {
+        if (next == null)
+        {
+            return true;
+        }
+
+        if (!next.IsRenderable)
+        {
+            return true;
+        }
+
+        if (next.Transparent)
+        {
+            return current.IsRenderable;
+        }
+
+        return false;
     }
 
     private void BuildFace(Vector3 pos, FaceMap map, Tile tile)
@@ -205,7 +184,7 @@ public class ChunkMesh : MonoBehaviour, IPoolItem
 
         m_indices.AddRange(new[] {
             last + 0, last + 1, last + 2,
-            last + 0, last + 2, last + 3
+            last + 2, last + 3, last + 0
         });
 
         m_uvs.AddRange(tile.Uvs);
@@ -220,11 +199,5 @@ public class ChunkMesh : MonoBehaviour, IPoolItem
     {
         enabled = false;
         m_meshRenderer.enabled = false;
-    }
-
-    private void EditorGenerateMesh()
-    {
-        GenerateMesh();
-        SetMesh();
     }
 }

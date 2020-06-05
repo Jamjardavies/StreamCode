@@ -8,10 +8,16 @@ using UnityEngine;
 public class ChunkManager : MonoBehaviour
 {
     [SerializeField]
+    private ChunkGenerationSettings m_chunkGenSettings = null;
+
+    [SerializeField]
+    private Blocks m_blocks = null;
+
+    [SerializeField]
     private ChunkMesh m_chunkPrefab = null;
 
     [SerializeField]
-    private Transform m_children;
+    private Transform m_children = null;
 
     [SerializeField]
     private Transform m_player = null;
@@ -22,23 +28,22 @@ public class ChunkManager : MonoBehaviour
     [SerializeField]
     private int m_chunkDistance = 2;
 
-    [SerializeField]
-    [Button("Generate", "EditorGenerateChunks")]
-    private int m_chunksSize = 4;
-
     private FastNoise m_noise;
 
     private Pool<ChunkMesh> m_chunkPool;
+    private ChunkGenerator m_generator;
 
     private readonly List<Vector2> m_chunkRange = new List<Vector2>();
+    private readonly List<Tuple<Task, ChunkMesh>> m_loadingChunks = new List<Tuple<Task, ChunkMesh>>();
     private readonly Dictionary<Vector2, ChunkMesh> m_loadedChunks = new Dictionary<Vector2, ChunkMesh>();
     private readonly List<Vector2> m_chunksToUnload = new List<Vector2>();
-    private readonly List<Tuple<Task, ChunkMesh>> m_loadingChunks = new List<Tuple<Task, ChunkMesh>>();
-
+    
     private void Awake()
     {
         m_noise = new FastNoise(m_seed);
+
         m_chunkPool = new Pool<ChunkMesh>("Chunk Pool", m_chunkPrefab, 256);
+        m_generator = new ChunkGenerator(m_noise, m_chunkGenSettings, m_blocks);
 
         // Generate the starting chunk.
         LoadChunk(Vector2.zero);
@@ -140,8 +145,11 @@ public class ChunkManager : MonoBehaviour
         mesh.transform.parent = m_children;
         mesh.Noise = m_noise;
         mesh.transform.position = new Vector3(pos.x * 16, 0, pos.y * 16);
-        mesh.ChunkIndex = new Vector2(pos.x, pos.y);
+        mesh.ChunkIndex = pos;
 
-        await Task.Run(mesh.GenerateMesh);
+        Block[][,] blocks = await Task.Run(() => m_generator.GenerateChunk(pos, 16));
+
+        await Task.Run(() => mesh.GenerateMesh(blocks));
     }
 }
+
